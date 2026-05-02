@@ -8,6 +8,7 @@ import traceback
 from pathlib import Path
 from urllib.request import urlretrieve
 
+import cv2
 import imageio
 import numpy as np
 import torch
@@ -30,10 +31,6 @@ from ltx_pipelines.ti2vid_two_stages import TI2VidTwoStagesPipeline
 from ltx_pipelines.utils.args import ImageConditioningInput
 from ltx_pipelines.utils.constants import DEFAULT_NEGATIVE_PROMPT
 from ltx_pipelines.utils.helpers import modality_from_latent_state
-from sglang.multimodal_gen.test.test_utils import (
-    _consistency_gt_filenames,
-    extract_key_frames_from_video,
-)
 
 REPO_ID = "Lightricks/LTX-2.3"
 OUT_DIR = Path("/tmp/mmgen-official-ltx23-report")
@@ -42,6 +39,44 @@ IMAGE_URL = (
     "5ffa56c2-ea1f-7a17-6bad-192ff9b6476d/825646124206.jpg/600x600bb.jpg"
 )
 SKIP_V2A_CROSS_ATTN_FOR_VIDEO_GT = False
+
+
+def _consistency_gt_filenames(case_id: str, num_gpus: int, is_video: bool) -> list[str]:
+    if is_video:
+        return [
+            f"{case_id}_{num_gpus}gpu_frame_0.png",
+            f"{case_id}_{num_gpus}gpu_frame_mid.png",
+            f"{case_id}_{num_gpus}gpu_frame_last.png",
+        ]
+    return [f"{case_id}_{num_gpus}gpu.jpg"]
+
+
+def extract_key_frames_from_video(video_bytes: bytes) -> list[np.ndarray]:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+        tmp.write(video_bytes)
+        tmp_path = tmp.name
+
+    try:
+        cap = cv2.VideoCapture(tmp_path)
+        if not cap.isOpened():
+            raise ValueError("Failed to open video file")
+
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if total_frames < 1:
+            raise ValueError("Video has no frames")
+
+        frames = []
+        for idx in (0, total_frames // 2, total_frames - 1):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            ok, frame = cap.read()
+            if not ok:
+                raise ValueError(f"Failed to read frame at index {idx}")
+            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        cap.release()
+        return frames
+    finally:
+        os.unlink(tmp_path)
 
 
 def parse_args():
